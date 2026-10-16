@@ -1,5 +1,5 @@
 import { createStore, del, get, set, values } from 'idb-keyval';
-import type { LlmChoice } from './config';
+import type { LlmChoice, LlmKey } from './config';
 import type { Meeting } from './types';
 
 const meetingStore = createStore('gijiroku', 'meetings');
@@ -29,8 +29,10 @@ export function newMeetingId(): string {
 // ---- 端末ごとの設定（localStorage は使えない環境もあるので必ず try/catch） ----
 
 const SETTINGS_KEY = 'gijiroku.settings';
-/** AI要約の途中でアプリが落ちたかを次回起動時に判定するための印 */
-const LLM_ATTEMPT_KEY = 'gijiroku.llmAttempt';
+/** AI要約の実行記録。正常に終われば消すので、次回起動時に残っていれば途中で止まったことがわかる */
+const AI_RUN_KEY = 'gijiroku.aiRun';
+/** 旧版の印（読み捨てる） */
+const OLD_ATTEMPT_KEY = 'gijiroku.llmAttempt';
 
 export interface Settings {
   llm: LlmChoice;
@@ -54,18 +56,43 @@ export function saveSettings(s: Settings): void {
   }
 }
 
-export function markLlmAttempt(modelId: string | null): void {
+export interface AiRun {
+  meetingId: string;
+  key: LlmKey;
+  modelId: string;
+  startedAt: number;
+  /** 途中で画面が閉じられた・ロックされた・別アプリに切り替えられたか */
+  hidden: boolean;
+}
+
+function writeAiRun(run: AiRun | null): void {
   try {
-    if (modelId) localStorage.setItem(LLM_ATTEMPT_KEY, modelId);
-    else localStorage.removeItem(LLM_ATTEMPT_KEY);
+    if (run) localStorage.setItem(AI_RUN_KEY, JSON.stringify(run));
+    else localStorage.removeItem(AI_RUN_KEY);
   } catch {
-    // 無視
+    // 記録できなくても処理は続ける
   }
 }
 
-export function lastUnfinishedLlmAttempt(): string | null {
+export function startAiRun(run: Omit<AiRun, 'startedAt' | 'hidden'>): void {
+  writeAiRun({ ...run, startedAt: Date.now(), hidden: false });
+}
+
+export function markAiRunHidden(): void {
+  const run = unfinishedAiRun();
+  if (run && !run.hidden) writeAiRun({ ...run, hidden: true });
+}
+
+export function finishAiRun(): void {
+  writeAiRun(null);
+}
+
+/** 前回、途中で止まったAI要約の記録（なければ null） */
+export function unfinishedAiRun(): AiRun | null {
   try {
-    return localStorage.getItem(LLM_ATTEMPT_KEY);
+    localStorage.removeItem(OLD_ATTEMPT_KEY);
+    const raw = localStorage.getItem(AI_RUN_KEY);
+    return raw ? (JSON.parse(raw) as AiRun) : null;
   } catch {
     return null;
   }

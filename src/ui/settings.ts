@@ -47,7 +47,7 @@ export function renderSettings(root: HTMLElement): void {
       <p>録音・文字起こし・要約・PDF作成はすべて端末内で行い、音声や議事録の内容を外部に送信しません。インターネットはAIモデルの初回ダウンロードにだけ使います。</p>
       <p class="muted">使用しているソフトウェア・モデル（敬称略）:<br />
         文字起こし: sherpa-onnx（Apache-2.0）、ReazonSpeech k2 v2（Apache-2.0）、Silero VAD（MIT）<br />
-        要約: WebLLM（Apache-2.0）、Gemma 2 日本語版（Gemma利用規約）、Gemma 4・Qwen3.5（Apache-2.0）<br />
+        要約: WebLLM（Apache-2.0）、Gemma 2 日本語版・Gemma 3（Gemma利用規約）、Gemma 4・Qwen3.5（Apache-2.0）<br />
         PDF: pdfmake（MIT）、BIZ UDPゴシック（SIL OFL 1.1）</p>
     </div>
   `;

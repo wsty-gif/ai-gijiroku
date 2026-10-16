@@ -6,14 +6,32 @@ import type { SummaryResult } from './index';
 
 /**
  * 要約AI（WebLLM）による議事録作成。
- * 使えるモデルは一度に約4,000トークンしか扱えないため、
+ * ブラウザで動くモデルは一度に扱える長さ（2,048〜4,096トークン）が短いため、
  *   1) 文字起こしを塊に分け、塊ごとに「議題・要点・決定事項・ToDo」を抜き出す
  *   2) 抜き出した結果をまとめ、タイトルと概要を作る
  * の2段階で処理する。
  */
 
-/** 1つの塊の文字数。日本語は1文字≒1トークン強なので、指示文と出力の分を残す。 */
-const CHUNK_CHARS = 1400;
+interface Budget {
+  /** 1つの塊の文字数。日本語は1文字≒1トークン弱なので、指示文と出力の分を残す */
+  chunkChars: number;
+  chunkTokens: number;
+  finalTokens: number;
+  /** 最後のまとめに渡す各項目の合計文字数の上限 */
+  topicsChars: number;
+  pointsChars: number;
+  decisionsChars: number;
+}
+
+function budgetFor(contextWindow: number): Budget {
+  return contextWindow >= 4096
+    ? { chunkChars: 1400, chunkTokens: 700, finalTokens: 600, topicsChars: 300, pointsChars: 1200, decisionsChars: 500 }
+    : { chunkChars: 700, chunkTokens: 450, finalTokens: 400, topicsChars: 150, pointsChars: 550, decisionsChars: 250 };
+}
+
+function isContextOverflow(e: unknown): boolean {
+  return e instanceof Error && /ContextWindow|context window/i.test(e.name + e.message);
+}
 
 const CHUNK_SCHEMA = {
   type: 'object',
@@ -58,12 +76,16 @@ interface FinalResult {
 
 export async function loadLlm(
   modelId: string,
+  contextWindow: number,
   onProgress: (ratio: number, downloading: boolean) => void,
 ): Promise<MLCEngine> {
   const webllm = await import('@mlc-ai/web-llm');
-  return webllm.CreateMLCEngine(modelId, {
-    initProgressCallback: (r: InitProgressReport) => onProgress(r.progress, /fetch/i.test(r.text)),
-  });
+  return webllm.CreateMLCEngine(
+    modelId,
+    { initProgressCallback: (r: InitProgressReport) => onProgress(r.progress, /fetch/i.test(r.text)) },
+    // 扱う長さを短くすると、その分の作業用メモリ（KVキャッシュ）が減る
+    { context_window_size: contextWindow },
+  );
 }
 
 function chunkPrompt(text: string): string {
@@ -142,17 +164,22 @@ function todosOf(v: unknown): Todo[] {
 }
 
 /** 塊1つを処理する。長すぎて入らなかったときは半分に割って再挑戦し、それでも駄目なら簡易要約で補う。 */
-async function summarizeChunk(engine: MLCEngine, modelId: string, text: string, depth = 0): Promise<ChunkResult> {
+async function summarizeChunk(
+  engine: MLCEngine,
+  modelId: string,
+  budget: Budget,
+  text: string,
+  depth = 0,
+): Promise<ChunkResult> {
   try {
-    const r = await askJson<Partial<ChunkResult>>(engine, modelId, chunkPrompt(text), CHUNK_SCHEMA, 700);
+    const r = await askJson<Partial<ChunkResult>>(engine, modelId, chunkPrompt(text), CHUNK_SCHEMA, budget.chunkTokens);
     return { topics: strings(r.topics), points: strings(r.points), decisions: strings(r.decisions), todos: todosOf(r.todos) };
   } catch (e) {
     await engine.resetChat().catch(() => {});
-    const tooLong = e instanceof Error && /ContextWindow|context window/i.test(e.name + e.message);
-    if (tooLong && depth < 2 && text.length > 200) {
+    if (isContextOverflow(e) && depth < 2 && text.length > 200) {
       const mid = text.lastIndexOf('\n', text.length / 2) > 0 ? text.lastIndexOf('\n', text.length / 2) : Math.floor(text.length / 2);
-      const a = await summarizeChunk(engine, modelId, text.slice(0, mid), depth + 1);
-      const b = await summarizeChunk(engine, modelId, text.slice(mid), depth + 1);
+      const a = await summarizeChunk(engine, modelId, budget, text.slice(0, mid), depth + 1);
+      const b = await summarizeChunk(engine, modelId, budget, text.slice(mid), depth + 1);
       return {
         topics: [...a.topics, ...b.topics],
         points: [...a.points, ...b.points],
@@ -166,25 +193,28 @@ async function summarizeChunk(engine: MLCEngine, modelId: string, text: string, 
   }
 }
 
-/** 要点が多すぎると最後のまとめに入りきらないので、均等に間引く。 */
-function thin(items: string[], maxChars: number): string[] {
+/** 項目が多すぎると最後のまとめに入りきらないので、均等に間引き、それでも長ければ後ろを削る。 */
+function fit(items: string[], maxChars: number): string[] {
   let out = items;
   while (out.length > 4 && out.join('').length > maxChars) out = out.filter((_, i) => i % 2 === 0);
+  while (out.length > 1 && out.join('').length > maxChars) out = out.slice(0, -1);
   return out;
 }
 
 export async function summarizeWithLlm(
   engine: MLCEngine,
   modelId: string,
+  contextWindow: number,
   segments: Segment[],
   onProgress: (done: number, total: number) => void,
 ): Promise<SummaryResult> {
-  const chunks = chunkTranscript(segments, CHUNK_CHARS);
+  const budget = budgetFor(contextWindow);
+  const chunks = chunkTranscript(segments, budget.chunkChars);
   const total = chunks.length + 1;
   const all: ChunkResult = { topics: [], points: [], decisions: [], todos: [] };
   for (const [i, chunk] of chunks.entries()) {
     onProgress(i, total);
-    const r = await summarizeChunk(engine, modelId, chunk);
+    const r = await summarizeChunk(engine, modelId, budget, chunk);
     all.topics.push(...r.topics);
     all.points.push(...r.points);
     all.decisions.push(...r.decisions);
@@ -197,24 +227,27 @@ export async function summarizeWithLlm(
   const decisions = dedupe(all.decisions);
   const todos = dedupeTodos(all.todos);
 
-  let final: FinalResult;
-  try {
-    const r = await askJson<Partial<FinalResult>>(
-      engine,
-      modelId,
-      finalPrompt(thin(topics, 300), thin(points, 1200), thin(decisions, 500)),
-      FINAL_SCHEMA,
-      600,
-    );
-    final = {
-      title: typeof r.title === 'string' && r.title.trim() ? r.title.trim() : topics[0] ?? '会議',
-      summary: typeof r.summary === 'string' ? r.summary.trim() : '',
-      agenda: strings(r.agenda),
-    };
-  } catch (e) {
-    console.warn('final summarize failed', e);
-    await engine.resetChat().catch(() => {});
-    final = { title: topics[0] ?? '会議', summary: '', agenda: topics.slice(0, 6) };
+  let final: FinalResult = { title: topics[0] ?? '会議', summary: '', agenda: topics.slice(0, 6) };
+  // 入りきらなかったときは、渡す量を半分ずつ減らしてやり直す
+  for (const scale of [1, 0.5, 0.25]) {
+    try {
+      const prompt = finalPrompt(
+        fit(topics, budget.topicsChars * scale),
+        fit(points, budget.pointsChars * scale),
+        fit(decisions, budget.decisionsChars * scale),
+      );
+      const r = await askJson<Partial<FinalResult>>(engine, modelId, prompt, FINAL_SCHEMA, budget.finalTokens);
+      final = {
+        title: typeof r.title === 'string' && r.title.trim() ? r.title.trim() : final.title,
+        summary: typeof r.summary === 'string' ? r.summary.trim() : '',
+        agenda: strings(r.agenda),
+      };
+      break;
+    } catch (e) {
+      console.warn('final summarize failed', e);
+      await engine.resetChat().catch(() => {});
+      if (!isContextOverflow(e)) break;
+    }
   }
   onProgress(total, total);
 

@@ -46,15 +46,16 @@ export const LLM_MODELS: LlmModel[] = [
   {
     key: 'light',
     label: '軽量',
-    description: 'Qwen3.5 0.8B。性能の低い端末向け（精度は下がります）',
-    idF16: 'Qwen3.5-0.8B-q4f16_1-MLC',
+    description: 'Gemma 3 1B。使うメモリが標準の約半分で、止まりにくい（精度は少し下がります）',
+    // Gemma 3 1B は省メモリ計算（shader-f16）対応GPU向けしかないため、非対応GPUでは Qwen3.5 0.8B を使う
+    idF16: 'gemma3-1b-it-q4f16_1-MLC',
     idF32: 'Qwen3.5-0.8B-q4f32_1-MLC',
-    approxGB: 0.5,
+    approxGB: 0.6,
   },
   {
     key: 'high',
     label: '高精度',
-    description: 'Gemma 4 E2B。メモリ8GB以上の高性能な端末向け',
+    description: 'Gemma 4 E2B。PC向け（スマホのブラウザではメモリ上限を超えて止まることがあります）',
     idF16: 'gemma-4-E2B-it-q4f16_1-MLC',
     idF32: 'gemma-4-E2B-it-q4f32_1-MLC',
     approxGB: 2.8,
@@ -64,3 +65,15 @@ export const LLM_MODELS: LlmModel[] = [
 export function llmModel(key: LlmKey): LlmModel {
   return LLM_MODELS.find((m) => m.key === key)!;
 }
+
+/** 途中で止まったときに次に使う、ひとつ軽い設定 */
+export function lighterChoice(key: LlmKey): LlmKey | 'none' {
+  return key === 'high' ? 'standard' : key === 'standard' ? 'light' : 'none';
+}
+
+/**
+ * 要約AIが一度に扱う長さ（トークン）。スマホのブラウザは1ページで使えるメモリの上限が
+ * 端末のメモリより小さいので、短くして使用量を約300MB減らす（そのぶん細かく分けて処理する）。
+ */
+export const LLM_CONTEXT_MOBILE = 2048;
+export const LLM_CONTEXT_DESKTOP = 4096;

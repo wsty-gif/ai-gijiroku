@@ -4,6 +4,7 @@ import { TranscriptionSession } from '../asr/session';
 import { MicRecorder } from '../audio/recorder';
 import { deleteMeeting, newMeetingId, saveMeeting } from '../storage';
 import type { Meeting, Segment } from '../types';
+import { keepScreenOn } from '../wakeLock';
 import { errorMessage, esc, formatBytes, formatClock, qs, toast } from './dom';
 import { navigate, setBusy } from './router';
 
@@ -28,6 +29,7 @@ export function ensureAsrModel(container: HTMLElement): Promise<void> {
         button.disabled = true;
         bar.hidden = false;
         void navigator.storage?.persist?.();
+        const releaseScreen = keepScreenOn();
         try {
           await downloadAsrModel((loaded, total) => {
             (bar.firstElementChild as HTMLElement).style.width = `${Math.min(100, (loaded / total) * 100)}%`;
@@ -39,6 +41,8 @@ export function ensureAsrModel(container: HTMLElement): Promise<void> {
           button.disabled = false;
           button.textContent = 'もう一度ダウンロードする';
           text.textContent = `ダウンロードに失敗しました: ${errorMessage(e)}`;
+        } finally {
+          releaseScreen();
         }
       });
     });

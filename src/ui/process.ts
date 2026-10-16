@@ -5,7 +5,8 @@ import { loadMeeting, loadSettings, saveMeeting } from '../storage';
 import { summarize, type SummarizeProgress } from '../summarize';
 import { formatDateTime } from '../summarize/text';
 import type { Meeting, Segment } from '../types';
-import { errorMessage, esc, formatClock, qs } from './dom';
+import { keepScreenOn } from '../wakeLock';
+import { errorMessage, esc, formatClock, qs, toast } from './dom';
 import { ensureAsrModel } from './record';
 import { navigate, setBusy } from './router';
 
@@ -29,7 +30,8 @@ export function renderProcess(
   root.innerHTML = `
     <div class="topbar"><button class="link" id="cancel" hidden>← 戻る</button></div>
     <h1>議事録を作成しています</h1>
-    <p class="muted">画面を閉じずにお待ちください。会議が長いほど時間がかかります。</p>
+    <p class="muted">会議が長いほど時間がかかります。</p>
+    <div class="notice">完了まで、この画面を開いたままにしてください。画面のロックや別のアプリへの切り替えをすると、処理が止まることがあります（自動ロックは止めています）。</div>
     <div id="setup"></div>
     <div class="card"><ul class="steps" id="steps"></ul></div>
     <div class="transcript" id="preview" hidden></div>
@@ -71,6 +73,14 @@ export function renderProcess(
   let disposed = false;
   let activeSession = route.session;
   let timer: number | undefined;
+  // 処理中は画面の自動ロックを止める（ロックされるとブラウザが処理を止めたりページを破棄したりする）
+  const releaseScreen = keepScreenOn();
+  let hiddenAt = 0;
+  const onVisibility = () => {
+    if (document.visibilityState === 'hidden') hiddenAt = Date.now();
+    else if (hiddenAt && Date.now() - hiddenAt > 1500) toast('作成中は画面を開いたままにしてください。処理が止まることがあります', 6000);
+  };
+  document.addEventListener('visibilitychange', onVisibility);
 
   async function transcribeFile(file: File): Promise<Meeting> {
     setStep('decode', 'active', file.name);
@@ -128,7 +138,7 @@ export function renderProcess(
           : `要約AI（${p.modelLabel}）を準備中 ${pct}%`,
       );
     } else {
-      setStep('summarize', 'active', `要約中 ${Math.min(p.done + 1, p.total)} / ${p.total}`);
+      setStep('summarize', 'active', `要約中（${p.modelLabel}） ${Math.min(p.done + 1, p.total)} / ${p.total}`);
     }
   }
 
@@ -155,6 +165,7 @@ export function renderProcess(
 
     if (meeting.segments.length === 0) {
       setBusy(false);
+      releaseScreen();
       qs(root, '#error').innerHTML = `
         <div class="notice">音声から文字を認識できませんでした。マイクの位置や音量、ファイルの内容を確認してください。</div>
         <button id="home">一覧に戻る</button>`;
@@ -164,13 +175,13 @@ export function renderProcess(
 
     setStep('summarize', 'active', '準備中…');
     // 文字起こしエンジンはここで止めてあるので、要約AIがメモリを使える
-    const outcome = await summarize(meeting.segments, loadSettings().llm, showProgress);
+    const outcome = await summarize(meeting.id, meeting.segments, loadSettings().llm, showProgress);
     const prev = meeting.minutes;
     meeting.minutes = {
       ...outcome.minutes,
       datetime: prev?.datetime ?? formatDateTime(meeting.createdAt),
       participants: prev?.participants ?? '',
-      note: outcome.fallbackReason,
+      note: outcome.note,
     };
     await saveMeeting(meeting);
     setStep('summarize', 'done', outcome.minutes.method === 'ai' ? 'AIで作成しました' : '簡易要約で作成しました');
@@ -182,6 +193,7 @@ export function renderProcess(
     console.error(e);
     clearInterval(timer);
     setBusy(false);
+    releaseScreen();
     qs(root, '#error').innerHTML = `
       <div class="notice">作成中にエラーが発生しました: ${esc(errorMessage(e))}</div>
       <div class="stack">
@@ -200,6 +212,8 @@ export function renderProcess(
   return () => {
     disposed = true;
     clearInterval(timer);
+    releaseScreen();
+    document.removeEventListener('visibilitychange', onVisibility);
     setBusy(false);
     if (activeSession !== route.session) activeSession?.dispose();
   };

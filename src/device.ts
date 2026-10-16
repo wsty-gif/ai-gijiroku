@@ -1,4 +1,4 @@
-import { llmModel, type LlmChoice, type LlmKey } from './config';
+import { LLM_CONTEXT_DESKTOP, LLM_CONTEXT_MOBILE, llmModel, type LlmChoice, type LlmKey } from './config';
 
 export interface GpuInfo {
   webgpu: boolean;
@@ -32,8 +32,20 @@ function deviceMemoryGB(): number | undefined {
   return (navigator as Navigator & { deviceMemory?: number }).deviceMemory;
 }
 
+/** スマホ・タブレットか（iPadOS は Mac と名乗るのでタッチ対応で見分ける） */
+export function isMobileDevice(): boolean {
+  const ua = navigator.userAgent;
+  return /iPhone|iPad|iPod|Android|Mobile/i.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1);
+}
+
+export interface ResolvedLlm {
+  key: LlmKey;
+  modelId: string;
+  contextWindow: number;
+}
+
 /** 設定と端末の性能から、使う要約AIを決める。null はAIを使わず簡易要約。 */
-export async function resolveLlm(choice: LlmChoice): Promise<{ key: LlmKey; modelId: string } | null> {
+export async function resolveLlm(choice: LlmChoice): Promise<ResolvedLlm | null> {
   if (choice === 'none') return null;
   const gpu = await detectGpu();
   if (!gpu.webgpu) return null;
@@ -46,5 +58,9 @@ export async function resolveLlm(choice: LlmChoice): Promise<{ key: LlmKey; mode
     key = choice;
   }
   const model = llmModel(key);
-  return { key, modelId: gpu.shaderF16 ? model.idF16 : model.idF32 };
+  return {
+    key,
+    modelId: gpu.shaderF16 ? model.idF16 : model.idF32,
+    contextWindow: isMobileDevice() ? LLM_CONTEXT_MOBILE : LLM_CONTEXT_DESKTOP,
+  };
 }

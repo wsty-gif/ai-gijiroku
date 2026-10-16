@@ -1,7 +1,16 @@
-import { ASR_MODEL, llmModel } from '../config';
+import { ASR_MODEL, lighterChoice, llmModel } from '../config';
 import { isAsrModelCached } from '../asr/modelCache';
 import { detectGpu, resolveLlm } from '../device';
-import { lastUnfinishedLlmAttempt, listMeetings, loadSettings, markLlmAttempt, newMeetingId, saveSettings } from '../storage';
+import {
+  finishAiRun,
+  listMeetings,
+  loadMeeting,
+  loadSettings,
+  newMeetingId,
+  saveSettings,
+  unfinishedAiRun,
+  type AiRun,
+} from '../storage';
 import { formatDateTime, formatDuration } from '../summarize/text';
 import type { Meeting } from '../types';
 import { esc, qs } from './dom';
@@ -41,28 +50,42 @@ export function renderHome(root: HTMLElement): void {
   });
   qs(root, '#settings').addEventListener('click', () => navigate({ name: 'settings' }));
 
-  const crashed = lastUnfinishedLlmAttempt();
-  if (crashed) {
+  const interrupted = unfinishedAiRun();
+  if (interrupted) {
+    // 案内は一度だけ出す
+    finishAiRun();
+    void renderInterrupted(interrupted);
+  }
+
+  /** 前回のAI要約が途中で止まっていたときの案内。止まった理由に合わせて伝え、続きから作成できるようにする。 */
+  async function renderInterrupted(run: AiRun) {
+    const meeting = await loadMeeting(run.meetingId);
     const box = qs(root, '#crash-notice');
+    let message: string;
+    if (run.hidden) {
+      message =
+        '前回の議事録作成は、画面のロックまたは別のアプリへの切り替えで中断されました（メモリ不足ではありません）。' +
+        '作成中は画面を開いたままにしてください。';
+    } else {
+      const next = lighterChoice(run.key);
+      saveSettings({ ...loadSettings(), llm: next });
+      const nextLabel = next === 'none' ? 'AIを使わない簡易要約' : `「${llmModel(next).label}」`;
+      message =
+        `前回の議事録作成中に、ブラウザが処理を止めました。スマホのブラウザは、1つのページで使えるメモリに端末のメモリより小さい上限があり、` +
+        `要約AI「${llmModel(run.key).label}」がその上限を超えた可能性があります。次からは${nextLabel}で作成します（設定で変更できます）。`;
+    }
+    const canResume = !!meeting && meeting.segments.length > 0;
     box.innerHTML = `
       <div class="notice">
-        前回、要約AIの処理中にアプリが終了しました。端末のメモリが足りなかった可能性があります。
-        要約AIを「軽量」または「AIを使わない」に切り替えると安定します。
+        ${esc(message)}${canResume ? ' 文字起こしは保存されています。' : ''}
         <div class="row" style="margin-top:8px">
-          <button id="to-light">軽量にする</button>
-          <button id="dismiss">このまま</button>
+          ${canResume ? '<button class="primary" id="resume">続きから作成</button>' : ''}
+          <button id="dismiss">閉じる</button>
         </div>
       </div>`;
-    const close = () => {
-      markLlmAttempt(null);
-      box.innerHTML = '';
-    };
-    qs(box, '#to-light').addEventListener('click', () => {
-      saveSettings({ ...loadSettings(), llm: 'light' });
-      close();
-      void renderStatus();
-    });
-    qs(box, '#dismiss').addEventListener('click', close);
+    box.querySelector('#resume')?.addEventListener('click', () => navigate({ name: 'process', id: run.meetingId }));
+    qs(box, '#dismiss').addEventListener('click', () => (box.innerHTML = ''));
+    void renderStatus();
   }
 
   async function renderStatus() {

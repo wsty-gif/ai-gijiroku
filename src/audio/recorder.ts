@@ -1,3 +1,4 @@
+import { keepScreenOn } from '../wakeLock';
 import { Resampler } from './resample';
 
 /**
@@ -16,7 +17,7 @@ export class MicRecorder {
   private stream?: MediaStream;
   private nodes: AudioNode[] = [];
   private resampler?: Resampler;
-  private wakeLock: WakeLockSentinel | null = null;
+  private releaseScreen?: () => void;
   private paused = false;
   private hiddenAt = 0;
   /** 録音した音声の長さ（16kHz換算のサンプル数） */
@@ -30,7 +31,6 @@ export class MicRecorder {
     if (this.hiddenAt && Date.now() - this.hiddenAt > 1500) this.onInterrupted();
     this.hiddenAt = 0;
     void this.ctx?.resume();
-    void this.requestWakeLock();
   };
 
   /** ボタンを押した処理の中から同期的に呼ぶこと（iPhoneは操作直後でないと音声処理を始められない）。 */
@@ -70,7 +70,7 @@ export class MicRecorder {
     }
     if (ctx.state !== 'running') await ctx.resume();
     document.addEventListener('visibilitychange', this.onVisibility);
-    await this.requestWakeLock();
+    this.releaseScreen = keepScreenOn();
   }
 
   private handle(chunk: Float32Array) {
@@ -82,16 +82,6 @@ export class MicRecorder {
     if (samples.length === 0) return;
     this.recordedSamples += samples.length;
     this.onAudio(samples);
-  }
-
-  private async requestWakeLock() {
-    if (!('wakeLock' in navigator) || this.wakeLock) return;
-    try {
-      this.wakeLock = await navigator.wakeLock.request('screen');
-      this.wakeLock.addEventListener('release', () => (this.wakeLock = null));
-    } catch {
-      // 省電力モードなどで拒否されることがある。録音自体は続ける
-    }
   }
 
   pause(): void {
@@ -109,7 +99,7 @@ export class MicRecorder {
     this.nodes = [];
     this.stream?.getTracks().forEach((t) => t.stop());
     await this.ctx?.close();
-    await this.wakeLock?.release().catch(() => {});
-    this.wakeLock = null;
+    this.releaseScreen?.();
+    this.releaseScreen = undefined;
   }
 }
