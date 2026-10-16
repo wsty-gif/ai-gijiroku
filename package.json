@@ -1,0 +1,26 @@
+{
+  "name": "gijiroku",
+  "private": true,
+  "version": "0.1.0",
+  "description": "スマホ単体で動くAI議事録Webアプリ（録音→文字起こし→要約→PDF）",
+  "type": "module",
+  "scripts": {
+    "fetch-vendor": "node scripts/fetch-vendor.mjs",
+    "dev": "vite",
+    "dev:lan": "vite --host --mode lan",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@mlc-ai/web-llm": "^0.2.86",
+    "idb-keyval": "^6.3.0",
+    "pdfmake": "^0.3.11"
+  },
+  "devDependencies": {
+    "@types/pdfmake": "^0.3.3",
+    "@vitejs/plugin-basic-ssl": "^2.3.0",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.4",
+    "vite-plugin-pwa": "^2.0.0"
+  }
+}
