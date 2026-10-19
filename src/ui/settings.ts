@@ -1,5 +1,6 @@
 import { ASR_MODEL, LLM_MODELS, type LlmChoice } from '../config';
 import { deleteAsrModel, isAsrModelCached } from '../asr/modelCache';
+import { listMicrophones } from '../audio/recorder';
 import { detectGpu } from '../device';
 import { listMeetings, loadSettings, saveSettings } from '../storage';
 import { errorMessage, esc, formatBytes, qs, toast } from './dom';
@@ -11,7 +12,7 @@ const CHOICES: { value: LlmChoice; label: string; desc: string }[] = [
   { value: 'none', label: 'AIを使わない', desc: 'キーワードから決定事項・ToDoを抜き出す簡易要約。どの端末でも動きます' },
 ];
 
-export function renderSettings(root: HTMLElement): void {
+export function renderSettings(root: HTMLElement): () => void {
   const settings = loadSettings();
   root.innerHTML = `
     <div class="topbar"><button class="link" id="back">← 戻る</button></div>
@@ -28,6 +29,20 @@ export function renderSettings(root: HTMLElement): void {
       ).join('')}
     </div>
     <p class="muted">AIの処理が途中で止まる・アプリが落ちる場合は「軽量」か「AIを使わない」を選んでください。</p>
+
+    <h2>マイク</h2>
+    <div class="card stack">
+      <p class="muted">スマホに挿した外部マイクや、PCにつないだ会議用マイク・オーディオインターフェースも使えます。接続しておくと一覧に出ます。</p>
+      <div class="mic-row">
+        <label for="mic">使うマイク</label>
+        <select id="mic"><option value="">既定のマイク</option></select>
+      </div>
+      <button id="list-mics">接続中のマイクを表示</button>
+      <label class="radio-option">
+        <input type="checkbox" id="processing" ${settings.audioProcessing ? 'checked' : ''} />
+        <span>音声の自動調整（ノイズ除去・音量の自動調整）<span class="desc">スマホ内蔵マイクではオンがおすすめです。専用の会議用マイク・ミキサー・オーディオインターフェースを使う場合はオフにすると、機器の音をそのまま使います。</span></span>
+      </label>
+    </div>
 
     <h2>この端末</h2>
     <div class="card"><ul class="status-list" id="device"><li class="muted">確認中…</li></ul></div>
@@ -58,6 +73,35 @@ export function renderSettings(root: HTMLElement): void {
     saveSettings({ ...loadSettings(), llm: value });
     toast('保存しました');
   });
+
+  const micSelect = qs<HTMLSelectElement>(root, '#mic');
+  async function renderMics() {
+    const mics = await listMicrophones().catch(() => []);
+    const saved = loadSettings().micDeviceId;
+    micSelect.innerHTML =
+      `<option value="">既定のマイク</option>` +
+      mics.map((m) => `<option value="${esc(m.deviceId)}" ${m.deviceId === saved ? 'selected' : ''}>${esc(m.label)}</option>`).join('');
+  }
+  micSelect.addEventListener('change', () => {
+    saveSettings({ ...loadSettings(), micDeviceId: micSelect.value || undefined });
+    toast('保存しました');
+  });
+  qs(root, '#list-mics').addEventListener('click', async () => {
+    // マイクの名前は使用を許可した後でないと取得できないので、一瞬だけ許可を求めてすぐ止める
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      stream.getTracks().forEach((t) => t.stop());
+    } catch (e) {
+      toast(errorMessage(e), 6000);
+    }
+    await renderMics();
+  });
+  qs<HTMLInputElement>(root, '#processing').addEventListener('change', (e) => {
+    saveSettings({ ...loadSettings(), audioProcessing: (e.target as HTMLInputElement).checked });
+    toast('保存しました（次の録音から反映）');
+  });
+  navigator.mediaDevices?.addEventListener('devicechange', renderMics);
+  void renderMics();
 
   qs(root, '#del-asr').addEventListener('click', async () => {
     if (!confirm('文字起こしモデルを削除しますか？')) return;
@@ -105,4 +149,6 @@ export function renderSettings(root: HTMLElement): void {
 
   void renderDevice();
   void renderStorage();
+
+  return () => navigator.mediaDevices?.removeEventListener('devicechange', renderMics);
 }

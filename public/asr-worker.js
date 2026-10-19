@@ -84,11 +84,12 @@ async function init(urls, cacheName) {
 
   const cache = 'caches' in self ? await caches.open(cacheName) : null;
   const written = [];
+  // 最後の true（canOwn）で、読み込んだデータを複製せずにそのまま仮想ファイルにする（メモリ節約）
   for (const [name, url] of Object.entries(urls)) {
-    M.FS_createDataFile('/m', name, await readModelFile(cache, url), true, false, false);
+    M.FS_createDataFile('/m', name, await readModelFile(cache, url), true, false, true);
     written.push(name);
   }
-  M.FS_createDataFile('/m', 'vad.onnx', await readModelFile(null, VENDOR + 'silero_vad.onnx'), true, false, false);
+  M.FS_createDataFile('/m', 'vad.onnx', await readModelFile(null, VENDOR + 'silero_vad.onnx'), true, false, true);
   written.push('vad.onnx');
 
   vad = createVad(M, {

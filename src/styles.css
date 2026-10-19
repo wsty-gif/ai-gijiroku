@@ -318,6 +318,32 @@ label {
   margin: 14px 0 4px;
 }
 
+.mic-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: -6px 0 12px;
+}
+
+.mic-row label {
+  margin: 0;
+  flex: none;
+}
+
+.mic-row select {
+  flex: 1;
+  min-width: 0;
+}
+
+select {
+  font: inherit;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 8px 10px;
+}
+
 input[type='text'],
 textarea {
   width: 100%;

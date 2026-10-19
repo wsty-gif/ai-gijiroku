@@ -36,16 +36,22 @@ const OLD_ATTEMPT_KEY = 'gijiroku.llmAttempt';
 
 export interface Settings {
   llm: LlmChoice;
+  /** 前回選んだマイク（つながっていなければ既定のマイクを使う） */
+  micDeviceId?: string;
+  /** ブラウザのノイズ除去・音量自動調整 */
+  audioProcessing: boolean;
 }
+
+const DEFAULT_SETTINGS: Settings = { llm: 'auto', audioProcessing: true };
 
 export function loadSettings(): Settings {
   try {
     const raw = localStorage.getItem(SETTINGS_KEY);
-    if (raw) return { llm: 'auto', ...JSON.parse(raw) };
+    if (raw) return { ...DEFAULT_SETTINGS, ...JSON.parse(raw) };
   } catch {
     // 読めない環境では既定値で動かす
   }
-  return { llm: 'auto' };
+  return { ...DEFAULT_SETTINGS };
 }
 
 export function saveSettings(s: Settings): void {
