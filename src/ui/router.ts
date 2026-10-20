@@ -56,9 +56,26 @@ export function navigate(route: Route, { replace = false } = {}): void {
   render(route);
 }
 
+let onIdle: (() => void) | null = null;
+
 /** 録音中・作成中は true にする。戻る操作とページ離脱を止める。 */
 export function setBusy(value: boolean): void {
   busy = value;
+  if (!value && onIdle) {
+    const fn = onIdle;
+    onIdle = null;
+    fn();
+  }
+}
+
+export function isBusy(): boolean {
+  return busy;
+}
+
+/** 録音・作成が終わったら（作業中でなければ今すぐ）実行する */
+export function whenIdle(fn: () => void): void {
+  if (busy) onIdle = fn;
+  else fn();
 }
 
 export function startRouter(r: Renderer): void {

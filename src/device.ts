@@ -1,4 +1,4 @@
-import { LLM_CONTEXT_DESKTOP, LLM_CONTEXT_MOBILE, llmModel, type LlmChoice, type LlmKey } from './config';
+import { LLM_CONTEXT, llmModel, type LlmChoice, type LlmEngine, type LlmKey } from './config';
 
 export interface GpuInfo {
   webgpu: boolean;
@@ -39,28 +39,47 @@ export function isMobileDevice(): boolean {
 }
 
 export interface ResolvedLlm {
+  engine: LlmEngine;
   key: LlmKey;
+  /** GPU版は WebLLM のモデルID、CPU版は GGUF の URL */
   modelId: string;
   contextWindow: number;
+}
+
+function wasmSupported(): boolean {
+  return typeof WebAssembly === 'object' && typeof WebAssembly.instantiate === 'function';
+}
+
+/** 要約AIをGPUで動かすか、CPUで動かすか（どちらも使えなければ null） */
+export async function llmEngine(): Promise<LlmEngine | null> {
+  const gpu = await detectGpu();
+  return gpu.webgpu ? 'webgpu' : wasmSupported() ? 'cpu' : null;
 }
 
 /** 設定と端末の性能から、使う要約AIを決める。null はAIを使わず簡易要約。 */
 export async function resolveLlm(choice: LlmChoice): Promise<ResolvedLlm | null> {
   if (choice === 'none') return null;
+  const engine = await llmEngine();
+  if (!engine) return null;
   const gpu = await detectGpu();
-  if (!gpu.webgpu) return null;
 
   let key: LlmKey;
   if (choice === 'auto') {
+    // GPUのあるPCでは高精度、それ以外（スマホ・GPUなし）は標準
     const mem = deviceMemoryGB();
-    key = mem !== undefined && mem < 6 ? 'light' : 'standard';
+    key = engine === 'webgpu' && !isMobileDevice() && (mem === undefined || mem >= 8) ? 'high' : 'standard';
   } else {
     key = choice;
   }
+  return resolveModel(engine, key, gpu.shaderF16);
+}
+
+/** エンジンとモデルの組み合わせから、実際に読み込むモデルを決める */
+export function resolveModel(engine: LlmEngine, key: LlmKey, shaderF16: boolean): ResolvedLlm {
+  // CPU では重すぎるモデル（高精度）は標準にする
+  if (engine === 'cpu' && !llmModel(key).cpu) key = 'standard';
   const model = llmModel(key);
-  return {
-    key,
-    modelId: gpu.shaderF16 ? model.idF16 : model.idF32,
-    contextWindow: isMobileDevice() ? LLM_CONTEXT_MOBILE : LLM_CONTEXT_DESKTOP,
-  };
+  return engine === 'webgpu'
+    ? { engine, key, modelId: shaderF16 ? model.webgpu.idF16 : model.webgpu.idF32, contextWindow: LLM_CONTEXT }
+    : { engine, key, modelId: model.cpu!.url, contextWindow: LLM_CONTEXT };
 }

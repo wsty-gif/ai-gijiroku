@@ -5,6 +5,9 @@ import { renderProcess } from './ui/process';
 import { renderRecord } from './ui/record';
 import { startRouter } from './ui/router';
 import { renderSettings } from './ui/settings';
+import { initUpdateHandling } from './update';
+
+initUpdateHandling();
 
 startRouter((root, route) => {
   switch (route.name) {

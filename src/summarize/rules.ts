@@ -8,8 +8,15 @@ import { dedupe, dedupeTodos } from './text';
 
 const DECISION =
   /(決定|決まり|決まっ|決めまし|決めましょう|合意|承認|採用|確定|ことにしま|ことになりま|で進めま|で進めましょう|でいきま|で行きま|でいこう|方針|目標にしま)/;
+/** 「では〜しましょう」のように、まとめ役が締めくくる言い方も決定とみなす（「〜しましょうか」は提案なので除く） */
+const DECISION_PROPOSAL = /^(では|それでは|じゃあ|では、|それでは、).*ましょう$/;
 const TODO =
-  /(お願いします|お願いでき|お願いしたい|までに|やっておきます|やります|対応しま|対応お願い|確認しま|確認しておきます|確認お願い|担当|宿題|期限|準備しま|送りま|送っておきます|共有しま|共有しておきます|連絡しま|連絡して|調整しま|作成しま|作っておきます|調べておきます|検討しま)/;
+  /(お願いします|お願いでき|お願いしたい|までに|やっておきます|やります|対応しま|対応お願い|確認しま|確認しておきます|確認お願い|担当|宿題|期限|準備しま|送りま|送っておきます|共有しま|共有しておきます|連絡しま|連絡して|調整しま|作成しま|作っておきます|調べておきます|検討しま|しておいてくれる|してもらえますか|してください|して下さい)/;
+/** 司会の進行（「では菊池さんお願いします」「報告をお願いします」）やあいさつは ToDo ではない */
+const NOT_TODO =
+  /^(では|次に|最後に|じゃあ|それでは)?[^。]{0,10}さん(から)?(、)?(お願いします|お願い|どうぞ)?$|^(お願いします|お願い)$|報告を?お願いします|よろしくお願い|ありがとうございます|お疲れさまでした/;
+/** 「やっておきます」のように、引き受けただけで中身のない短い返事（中身は直前の依頼にある） */
+const ACCEPT_ONLY = /^(はい|分かりました|わかりました|了解です|承知しました|かしこまりました)?.{0,10}(やっておきます|共有しておきます|対応します|やります|しておきます|します)$/;
 const DUE =
   /(\d{1,2}月\d{1,2}日|[一二三四五六七八九十]{1,3}月[一二三四五六七八九十]{1,3}日|\d{1,2}\/\d{1,2}|\d{1,2}日(?:まで|中)|来週の?[月火水木金土日]曜日?|来週|再来週|今週中?|明日|明後日|あさって|今日中|今月末|月末|週明け|来月|[月火水木金土日]曜日)/;
 const OWNER = /([一-龥々ァ-ヶーA-Za-z]{1,8})さん/;
@@ -21,6 +28,8 @@ const STOP_WORDS = new Set([
   '全然', '実際', '意味', '必要', '大体', '最初', '最後', '今回', '前回', '次回', '以上', '以下', '方向',
   '形', '辺り', 'あたり', '関係', '状況', '状態', '内容', '話', 'お話', '質問', '何か', 'ところ', 'ちょっと',
   'そうですね', 'ありがとう', 'よろしく', 'お願い', 'ミーティング', '会議',
+  // 会議でよく出るが、それだけでは話題を表さない言葉
+  '予定', '報告', '実施', '実施中', '進捗', '作業', '対応', '確認', '共有', '調整', '開催', '担当', '検討', '個人的',
 ]);
 
 function sentencesOf(segments: Segment[]): string[] {
@@ -68,10 +77,13 @@ function isKeyword(w: string): boolean {
 }
 
 function topKeywords(sentences: string[], limit: number): { word: string; count: number }[] {
+  // 「〇〇さん」の〇〇は人の名前なので話題から除く
+  const names = new Set<string>();
+  for (const s of sentences) for (const m of s.matchAll(/([一-龥々ァ-ヶー]{1,4})さん/g)) names.add(m[1]);
   const counts = new Map<string, number>();
   for (const s of sentences) {
     for (const w of words(s)) {
-      if (isKeyword(w)) counts.set(w, (counts.get(w) ?? 0) + 1);
+      if (isKeyword(w) && !names.has(w)) counts.set(w, (counts.get(w) ?? 0) + 1);
     }
   }
   return [...counts.entries()]
@@ -90,6 +102,26 @@ function toTodo(sentence: string): Todo {
   };
 }
 
+/** 決定・依頼・引き受けの可能性がある言い回し（AIへのヒント用。簡易要約より広めに拾う） */
+const HINT = /ましょう|ください|下さい|お願い|しておきます|やっておきます|してもらえ|くれるかな|もらおうかな|決定|決ま|までに|提示します|進めて/;
+const NOT_HINT =
+  /^(では|次に|最後に|じゃあ|それでは)?[^。]{0,10}さん(から)?(お願いします|お願い|どうぞ)?$|^(お願いします|お願い)$|報告を?お願いします|よろしくお願い|ありがとうございま|お疲れさま/;
+
+/**
+ * 要約AIに渡すヒント。決定・依頼・引き受けの可能性がある発言を、前後の発言つきで拾う。
+ * 小さいAIは長い文字起こしの中の大事な発言を見落としやすいので、目印として一緒に渡す。
+ */
+export function hintLines(lines: string[], limit = 15): string[] {
+  const out: string[] = [];
+  lines.forEach((s, i) => {
+    if (!HINT.test(s) || NOT_HINT.test(s)) return;
+    const prev = i > 0 ? lines[i - 1].slice(0, 60) : '';
+    const next = i + 1 < lines.length ? lines[i + 1].slice(0, 40) : '';
+    out.push(`- ${prev ? `（前）${prev} → ` : ''}「${s.slice(0, 120)}」${next ? ` → （次）${next}` : ''}`);
+  });
+  return out.slice(0, limit);
+}
+
 export interface RuleResult {
   title: string;
   summary: string;
@@ -104,8 +136,21 @@ export function summarizeByRules(segments: Segment[]): RuleResult {
   const keywords = topKeywords(sentences, 8);
   const weight = new Map(keywords.map((k) => [k.word, k.count]));
 
-  const decisions = dedupe(sentences.filter((s) => DECISION.test(s)));
-  const todos = dedupeTodos(sentences.filter((s) => TODO.test(s) && !DECISION.test(s)).map(toTodo));
+  const isDecision = (s: string) => DECISION.test(s) || DECISION_PROPOSAL.test(s);
+  const decisions = dedupe(sentences.filter(isDecision));
+
+  const todoItems: Todo[] = [];
+  sentences.forEach((s, i) => {
+    if (!TODO.test(s) || isDecision(s) || NOT_TODO.test(s)) return;
+    if (ACCEPT_ONLY.test(s)) {
+      // 返事だけなら、直前の依頼を作業内容にする（直前も ToDo として拾っていれば重複するので dedupe で消える）
+      const prev = sentences[i - 1];
+      if (prev && !NOT_TODO.test(prev)) todoItems.push(toTodo(prev));
+      return;
+    }
+    todoItems.push(toTodo(s));
+  });
+  const todos = dedupeTodos(todoItems);
 
   const pointCount = Math.min(8, Math.max(3, Math.round(sentences.length / 15)));
   const points = sentences

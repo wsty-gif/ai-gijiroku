@@ -47,7 +47,12 @@ const DEFAULT_SETTINGS: Settings = { llm: 'auto', audioProcessing: true };
 export function loadSettings(): Settings {
   try {
     const raw = localStorage.getItem(SETTINGS_KEY);
-    if (raw) return { ...DEFAULT_SETTINGS, ...JSON.parse(raw) };
+    if (raw) {
+      const s: Settings = { ...DEFAULT_SETTINGS, ...JSON.parse(raw) };
+      // 旧版の「軽量」は精度が足りず廃止したので、端末に合わせた自動選択に戻す
+      if ((s.llm as string) === 'light') s.llm = 'auto';
+      return s;
+    }
   } catch {
     // 読めない環境では既定値で動かす
   }

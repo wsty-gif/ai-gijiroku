@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@mlc-ai/web-llm": "^0.2.86",
+    "@wllama/wllama": "^3.8.1",
     "idb-keyval": "^6.3.0",
     "pdfmake": "^0.3.11"
   },
@@ -21,6 +22,9 @@
     "@vitejs/plugin-basic-ssl": "^2.3.0",
     "typescript": "^7.0.2",
     "vite": "^8.3.4",
-    "vite-plugin-pwa": "^2.0.0"
+    "vite-plugin-pwa": "^2.0.0",
+    "workbox-core": "^7.4.1",
+    "workbox-precaching": "^7.4.1",
+    "workbox-routing": "^7.4.1"
   }
 }

@@ -1,6 +1,7 @@
 import { createMinutesPdf, downloadBlob, pdfFileName, shareOrDownload } from '../pdf';
 import { deleteMeeting, loadMeeting, saveMeeting } from '../storage';
 import type { Meeting, Minutes, Todo } from '../types';
+import { isStaleModuleError, onBeforeReload, reloadForUpdate, warmUpModules } from '../update';
 import { errorMessage, esc, formatClock, qs, toast } from './dom';
 import { navigate } from './router';
 
@@ -16,11 +17,17 @@ export function renderEdit(root: HTMLElement, id: string): () => void {
   root.innerHTML = '<p class="muted">読み込み中…</p>';
   let saveTimer: number | undefined;
   let meeting: Meeting | undefined;
+  warmUpModules();
 
   const persist = () => {
     clearTimeout(saveTimer);
     saveTimer = window.setTimeout(() => meeting && void saveMeeting(meeting), 600);
   };
+  // アプリ更新で再読み込みする前に、編集中の内容を保存する
+  const unregister = onBeforeReload(async () => {
+    clearTimeout(saveTimer);
+    if (meeting) await saveMeeting(meeting);
+  });
 
   void loadMeeting(id).then((m) => {
     if (!m) {
@@ -160,7 +167,11 @@ export function renderEdit(root: HTMLElement, id: string): () => void {
         const blob = await createMinutesPdf(m);
         await deliver(blob, pdfFileName(m));
       } catch (e) {
-        toast(`PDFを作成できませんでした: ${errorMessage(e)}`, 6000);
+        if (isStaleModuleError(e)) {
+          reloadForUpdate('アプリが更新されていたため再読み込みします。もう一度PDFのボタンを押してください');
+        } else {
+          toast(`PDFを作成できませんでした: ${errorMessage(e)}`, 6000);
+        }
       } finally {
         button.disabled = false;
         button.textContent = label;
@@ -186,6 +197,7 @@ export function renderEdit(root: HTMLElement, id: string): () => void {
   }
 
   return () => {
+    unregister();
     // 画面を離れるときは保存待ちを即時に保存する
     if (saveTimer !== undefined && meeting) {
       clearTimeout(saveTimer);

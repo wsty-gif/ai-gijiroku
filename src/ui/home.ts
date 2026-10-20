@@ -1,6 +1,6 @@
 import { ASR_MODEL, lighterChoice, llmModel } from '../config';
 import { isAsrModelCached } from '../asr/modelCache';
-import { detectGpu, resolveLlm } from '../device';
+import { resolveLlm } from '../device';
 import {
   finishAiRun,
   listMeetings,
@@ -89,7 +89,7 @@ export function renderHome(root: HTMLElement): void {
   }
 
   async function renderStatus() {
-    const [cached, gpu, llm] = await Promise.all([isAsrModelCached(), detectGpu(), resolveLlm(loadSettings().llm)]);
+    const [cached, llm] = await Promise.all([isAsrModelCached(), resolveLlm(loadSettings().llm)]);
     asrCached = cached;
     const asr = cached
       ? '<span class="ok">準備済み</span>'
@@ -97,8 +97,8 @@ export function renderHome(root: HTMLElement): void {
     let summary: string;
     if (llm) {
       const m = llmModel(llm.key);
-      summary = `<span>AI（${esc(m.label)}）</span>`;
-    } else if (!gpu.webgpu && loadSettings().llm !== 'none') {
+      summary = `<span>AI（${esc(m.label)}・${llm.engine === 'webgpu' ? 'GPU' : 'CPU'}）</span>`;
+    } else if (loadSettings().llm !== 'none') {
       summary = '<span class="muted">簡易要約（この端末はAI非対応）</span>';
     } else {
       summary = '<span class="muted">簡易要約（AIを使わない）</span>';

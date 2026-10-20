@@ -5,6 +5,7 @@ import { loadMeeting, loadSettings, saveMeeting } from '../storage';
 import { summarize, type SummarizeProgress } from '../summarize';
 import { formatDateTime } from '../summarize/text';
 import type { Meeting, Segment } from '../types';
+import { warmUpModules } from '../update';
 import { keepScreenOn } from '../wakeLock';
 import { errorMessage, esc, formatClock, qs, toast } from './dom';
 import { ensureAsrModel } from './record';
@@ -34,6 +35,7 @@ export function renderProcess(
     <div class="notice">完了まで、この画面を開いたままにしてください。画面のロックや別のアプリへの切り替えをすると、処理が止まることがあります（自動ロックは止めています）。</div>
     <div id="setup"></div>
     <div class="card"><ul class="steps" id="steps"></ul></div>
+    <button id="quick" hidden>AI要約をやめて、簡易要約ですぐ作成する</button>
     <div class="transcript" id="preview" hidden></div>
     <div id="error"></div>
   `;
@@ -73,6 +75,7 @@ export function renderProcess(
   let disposed = false;
   let activeSession = route.session;
   let timer: number | undefined;
+  warmUpModules();
   // 処理中は画面の自動ロックを止める（ロックされるとブラウザが処理を止めたりページを破棄したりする）
   const releaseScreen = keepScreenOn();
   let hiddenAt = 0;
@@ -133,14 +136,37 @@ export function renderProcess(
       setStep(
         'summarize',
         'active',
-        p.downloading
+        // 端末に保存済みのときは、読み込みの最後に 100% だけが届くので「準備中」と出す
+        p.downloading && pct < 100
           ? `要約AI（${p.modelLabel}）をダウンロード中 ${pct}%（初回のみ。Wi-Fi推奨）`
-          : `要約AI（${p.modelLabel}）を準備中 ${pct}%`,
+          : `要約AI（${p.modelLabel}）を準備中…`,
       );
     } else {
-      setStep('summarize', 'active', `要約中（${p.modelLabel}） ${Math.min(p.done + 1, p.total)} / ${p.total}`);
+      const slow = p.engine === 'cpu' ? '（GPUのない端末のためCPUで処理しています。時間がかかります）' : '';
+      const part = p.total > 1 ? ` ${Math.min(p.done + 1, p.total)} / ${p.total}` : '';
+      let doing = '・会議の内容を読んでいます';
+      if (p.ask?.phase === 'reading') {
+        const left = p.ask.remainingSec !== undefined ? `、残り約${formatMinutes(p.ask.remainingSec)}` : '';
+        doing = `・会議の内容を読んでいます ${Math.round(p.ask.ratio * 100)}%${left}`;
+      } else if (p.ask?.phase === 'writing') {
+        doing = `・議事録を書いています（${p.ask.chars}文字）`;
+      }
+      setStep('summarize', 'active', `要約中（${p.modelLabel}）${part}${doing}${slow}`);
     }
   }
+
+  function formatMinutes(sec: number): string {
+    return sec < 60 ? '1分' : `${Math.ceil(sec / 60)}分`;
+  }
+
+  // AI要約は端末によって時間がかかるので、途中でやめて簡易要約ですぐ作れるようにする
+  const abort = new AbortController();
+  const quick = qs<HTMLButtonElement>(root, '#quick');
+  quick.addEventListener('click', () => {
+    quick.disabled = true;
+    quick.textContent = '切り替えています…';
+    abort.abort();
+  });
 
   const cancel = qs(root, '#cancel');
   cancel.addEventListener('click', () => navigate({ name: 'home' }));
@@ -174,8 +200,10 @@ export function renderProcess(
     }
 
     setStep('summarize', 'active', '準備中…');
+    quick.hidden = loadSettings().llm === 'none';
     // 文字起こしエンジンはここで止めてあるので、要約AIがメモリを使える
-    const outcome = await summarize(meeting.id, meeting.segments, loadSettings().llm, showProgress);
+    const outcome = await summarize(meeting.id, meeting.segments, loadSettings().llm, showProgress, abort.signal);
+    quick.hidden = true;
     const prev = meeting.minutes;
     meeting.minutes = {
       ...outcome.minutes,

@@ -4,6 +4,7 @@ import { TranscriptionSession } from '../asr/session';
 import { listMicrophones, MicRecorder } from '../audio/recorder';
 import { deleteMeeting, loadSettings, newMeetingId, saveMeeting, saveSettings } from '../storage';
 import type { Meeting, Segment } from '../types';
+import { warmUpModules } from '../update';
 import { keepScreenOn } from '../wakeLock';
 import { errorMessage, esc, formatBytes, formatClock, qs, toast } from './dom';
 import { navigate, setBusy } from './router';
@@ -159,6 +160,7 @@ export function renderRecord(root: HTMLElement, autoStart: boolean): () => void 
   function start() {
     // ここまでは同期で進めること（iPhoneで録音を開始できるようにするため）
     const recording = recorder.start();
+    warmUpModules();
     meeting = {
       id: newMeetingId(),
       createdAt: Date.now(),

@@ -29,10 +29,19 @@ importScripts(
   VENDOR + 'sherpa-onnx-vad.js',
 );
 
-// 音声区間の前後に足す余白。区間の頭や語尾（「〜ます」の「す」など）が切れて
-// 認識されないのを防ぐ。合計は minSilenceDuration より短くし、隣の区間と重ならないようにする。
-const PAD_BEFORE = Math.round(0.25 * SAMPLE_RATE);
-const PAD_AFTER = Math.round(0.3 * SAMPLE_RATE);
+// 音声区間の前後に足す余白（前, 後）。区間の頭や語尾（「〜ます」の「す」など）が切れて
+// 認識されないのを防ぐ。
+// 余白の取り方によって、文字起こしエンジンが言葉のまとまりを丸ごと落とすことがあるため、
+// 2通りの余白で文字起こしして長い方（＝落としていない方）を採用する。
+// 実際の会議音声で、1通りのときに抜けていた発言（「〜さんが研修のため不在です」など）が拾えるようになった。
+const MARGINS = [
+  [Math.round(0.4 * SAMPLE_RATE), Math.round(0.6 * SAMPLE_RATE)],
+  [Math.round(0.25 * SAMPLE_RATE), Math.round(0.3 * SAMPLE_RATE)],
+];
+const PAD_AFTER = MARGINS[0][1];
+/** 1回の文字起こしにかかる時間 / 音声の長さ（移動平均）。遅い端末では2通り目を省いて録音に追いつく */
+let passLoad = 0;
+const DUAL_PASS_MAX_LOAD = 0.35;
 // 余白を切り出すために直近の音声を覚えておく（リングバッファ）
 const HISTORY = new Float32Array(60 * SAMPLE_RATE);
 
@@ -154,8 +163,18 @@ function drainSegments() {
     vad.pop();
     const start = seg.start;
     const end = seg.start + seg.samples.length;
-    const padded = recall(start - PAD_BEFORE, end + PAD_AFTER);
-    const text = decode(padded.length >= seg.samples.length ? padded : seg.samples);
+    const seconds = Math.max(0.5, seg.samples.length / SAMPLE_RATE);
+    const passes = passLoad < DUAL_PASS_MAX_LOAD ? MARGINS.length : 1;
+    const t0 = performance.now();
+    let text = '';
+    for (let i = 0; i < passes; i++) {
+      const [before, after] = MARGINS[i];
+      const padded = recall(start - before, end + after);
+      const t = decode(padded.length >= seg.samples.length ? padded : seg.samples);
+      if (t.length > text.length) text = t;
+    }
+    const load = (performance.now() - t0) / 1000 / passes / seconds;
+    passLoad = passLoad === 0 ? load : passLoad * 0.8 + load * 0.2;
     if (text) {
       self.postMessage({ type: 'segment', start: start / SAMPLE_RATE, end: end / SAMPLE_RATE, text });
     }
@@ -211,6 +230,7 @@ self.onmessage = async (e) => {
         leftover = new Float32Array(0);
         processedSamples = 0;
         vadSamples = 0;
+        passLoad = 0;
         break;
     }
   } catch (err) {

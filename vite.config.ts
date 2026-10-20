@@ -12,6 +12,16 @@ export default defineConfig(({ mode }) => ({
     VitePWA({
       registerType: 'autoUpdate',
       injectRegister: 'auto',
+      // 独自の Service Worker（src/sw.ts）を使う。画面にクロスオリジン分離のヘッダーを付けるため
+      strategies: 'injectManifest',
+      srcDir: 'src',
+      filename: 'sw.ts',
+      injectManifest: {
+        // アプリ本体と文字起こしエンジン・フォント・CPU版AIエンジンを端末に保存し、オフラインでも開けるようにする。
+        // AIモデル本体（数百MB〜）はここではなく、各ライブラリが端末に保存する。
+        globPatterns: ['**/*.{js,css,html,png,svg,wasm,onnx,ttf}'],
+        maximumFileSizeToCacheInBytes: 20 * 1024 * 1024,
+      },
       manifest: {
         name: 'AI議事録',
         short_name: 'AI議事録',
@@ -27,13 +37,6 @@ export default defineConfig(({ mode }) => ({
           { src: 'icons/icon-512.png', sizes: '512x512', type: 'image/png' },
           { src: 'icons/icon-maskable-512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
         ],
-      },
-      workbox: {
-        // アプリ本体と文字起こしエンジン・フォントを端末に保存し、オフラインでも開けるようにする。
-        // AIモデル本体（数百MB〜）はここではなく、各ライブラリがCache Storageに保存する。
-        globPatterns: ['**/*.{js,css,html,png,svg,wasm,onnx,ttf}'],
-        maximumFileSizeToCacheInBytes: 20 * 1024 * 1024,
-        navigateFallback: 'index.html',
       },
     }),
   ],

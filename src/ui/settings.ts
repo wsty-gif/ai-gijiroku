@@ -7,8 +7,12 @@ import { errorMessage, esc, formatBytes, qs, toast } from './dom';
 import { navigate } from './router';
 
 const CHOICES: { value: LlmChoice; label: string; desc: string }[] = [
-  { value: 'auto', label: '自動（おすすめ）', desc: '端末に合わせて「標準」か「軽量」を選びます' },
-  ...LLM_MODELS.map((m) => ({ value: m.key, label: m.label, desc: `${m.description}（初回 約${m.approxGB}GB）` })),
+  { value: 'auto', label: '自動（おすすめ）', desc: 'GPUのあるPCでは「高精度」、スマホやGPUのない端末では「標準」を使います' },
+  ...LLM_MODELS.map((m) => ({
+    value: m.key,
+    label: m.label,
+    desc: `${m.description}（初回ダウンロード: GPU版 約${m.webgpu.approxGB}GB${m.cpu ? ` / CPU版 約${m.cpu.approxGB}GB` : '、CPUでは「標準」を使用'}）`,
+  })),
   { value: 'none', label: 'AIを使わない', desc: 'キーワードから決定事項・ToDoを抜き出す簡易要約。どの端末でも動きます' },
 ];
 
@@ -28,7 +32,7 @@ export function renderSettings(root: HTMLElement): () => void {
         </label>`,
       ).join('')}
     </div>
-    <p class="muted">AIの処理が途中で止まる・アプリが落ちる場合は「軽量」か「AIを使わない」を選んでください。</p>
+    <p class="muted">AIの処理が途中で止まる・アプリが落ちる場合は「AIを使わない」を選んでください。</p>
 
     <h2>マイク</h2>
     <div class="card stack">
@@ -62,7 +66,7 @@ export function renderSettings(root: HTMLElement): () => void {
       <p>録音・文字起こし・要約・PDF作成はすべて端末内で行い、音声や議事録の内容を外部に送信しません。インターネットはAIモデルの初回ダウンロードにだけ使います。</p>
       <p class="muted">使用しているソフトウェア・モデル（敬称略）:<br />
         文字起こし: sherpa-onnx（Apache-2.0）、ReazonSpeech k2 v2（Apache-2.0）、Silero VAD（MIT）<br />
-        要約: WebLLM（Apache-2.0）、Gemma 2 日本語版・Gemma 3（Gemma利用規約）、Gemma 4・Qwen3.5（Apache-2.0）<br />
+        要約: WebLLM（Apache-2.0）、wllama・llama.cpp（MIT）、Qwen3.5（Apache-2.0）<br />
         PDF: pdfmake（MIT）、BIZ UDPゴシック（SIL OFL 1.1）</p>
     </div>
   `;
@@ -113,12 +117,16 @@ export function renderSettings(root: HTMLElement): () => void {
   qs(root, '#del-llm').addEventListener('click', async () => {
     if (!confirm('要約AIのモデルをすべて削除しますか？')) return;
     try {
+      // GPU版（WebLLM）の保存分
       const webllm = await import('@mlc-ai/web-llm');
       for (const m of LLM_MODELS) {
-        for (const id of [m.idF16, m.idF32]) {
+        for (const id of [m.webgpu.idF16, m.webgpu.idF32]) {
           if (await webllm.hasModelInCache(id)) await webllm.deleteModelAllInfoInCache(id);
         }
       }
+      // CPU版（wllama）の保存分
+      const { CacheManager } = await import('@wllama/wllama');
+      await new CacheManager().clear();
       toast('削除しました');
     } catch (e) {
       toast(`削除できませんでした: ${errorMessage(e)}`);
@@ -130,7 +138,7 @@ export function renderSettings(root: HTMLElement): () => void {
     const gpu = await detectGpu();
     const mem = (navigator as Navigator & { deviceMemory?: number }).deviceMemory;
     qs(root, '#device').innerHTML = `
-      <li><span>AI要約（WebGPU）</span><span>${gpu.webgpu ? '<span class="ok">対応</span>' : '非対応'}</span></li>
+      <li><span>AI要約</span><span>${gpu.webgpu ? '<span class="ok">GPUで実行（速い）</span>' : 'CPUで実行（GPU非対応のため時間がかかります）'}</span></li>
       <li><span>省メモリ計算（shader-f16）</span><span>${gpu.shaderF16 ? '対応' : '非対応'}</span></li>
       <li><span>メモリ</span><span>${mem ? `${mem}GB以上` : '取得できません'}</span></li>`;
   }

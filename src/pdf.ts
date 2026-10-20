@@ -37,6 +37,11 @@ function loadPdfMake(): Promise<PdfMake> {
   return pdfMakeReady;
 }
 
+/** PDF作成の部品とフォントを先に読み込んでおく（アプリ更新で古い部品が消えても作れるように） */
+export async function preloadPdf(): Promise<void> {
+  await loadPdfMake();
+}
+
 function heading(text: string): Content {
   return {
     stack: [
